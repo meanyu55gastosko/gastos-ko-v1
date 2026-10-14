@@ -13,9 +13,9 @@
 	<key>CFBundleInfoDictionaryVersion</key>
 	<string>6.0</string>
 	<key>CFBundleName</key>
-	<string>helloworld</string>
+	<string>gastos_ko</string>
 <key>CFBundleDisplayName</key>
-<string>helloworld</string>
+<string>gastosko</string>
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
 	<key>CFBundleShortVersionString</key>
