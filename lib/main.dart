@@ -2,6 +2,9 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:intl/intl.dart';
 import 'dart:math' as math;
+import 'dart:convert';
+import 'package:shared_preferences/shared_preferences.dart';
+import 'package:url_launcher/url_launcher.dart';
 
 void main() => runApp(const GastosKoApp());
 
@@ -26,18 +29,15 @@ class CommaFormatter extends TextInputFormatter {
         .replaceAll(',', '')
         .replaceAll('₱', '')
         .replaceAll(' ', '')
-        .trim()
         .replaceAll(RegExp(r'[^0-9]'), '');
     if (clean.isEmpty) return const TextEditingValue(text: '');
     int val = int.tryParse(clean) ?? 0;
-    String formatted = _fmt.format(val);
     return TextEditingValue(
-        text: formatted,
-        selection: TextSelection.collapsed(offset: formatted.length));
+        text: _fmt.format(val),
+        selection: TextSelection.collapsed(offset: _fmt.format(val).length));
   }
 }
 
-// SPLASH - CUSTOM ASSETS LOGO - PLAIN GOLD ASTIG!
 class SplashScreen extends StatefulWidget {
   const SplashScreen({super.key});
   @override
@@ -47,8 +47,7 @@ class SplashScreen extends StatefulWidget {
 class _SplashState extends State<SplashScreen>
     with SingleTickerProviderStateMixin {
   late AnimationController _ctrl;
-  late Animation<double> _scale;
-  late Animation<double> _glow;
+  late Animation<double> _scale, _glow;
   @override
   void initState() {
     super.initState();
@@ -57,12 +56,12 @@ class _SplashState extends State<SplashScreen>
       ..repeat(reverse: true);
     _scale = Tween<double>(begin: 0.9, end: 1.15)
         .animate(CurvedAnimation(parent: _ctrl, curve: Curves.easeInOut));
-    _glow = Tween<double>(begin: 25, end: 60)
+    _glow = Tween<double>(begin: 25, end: 70)
         .animate(CurvedAnimation(parent: _ctrl, curve: Curves.easeInOut));
     Future.delayed(const Duration(milliseconds: 2500), () {
-      if (!mounted) return;
-      Navigator.pushReplacement(
-          context, MaterialPageRoute(builder: (_) => const HomeScreen()));
+      if (mounted)
+        Navigator.pushReplacement(
+            context, MaterialPageRoute(builder: (_) => const HomeScreen()));
     });
   }
 
@@ -79,37 +78,22 @@ class _SplashState extends State<SplashScreen>
       body: Center(
         child: AnimatedBuilder(
           animation: _ctrl,
-          builder: (context, child) =>
+          builder: (_, __) =>
               Column(mainAxisAlignment: MainAxisAlignment.center, children: [
             Transform.scale(
               scale: _scale.value,
               child: Container(
-                width: 130,
-                height: 130,
-                decoration: BoxDecoration(
-                  shape: BoxShape.circle,
-                  // PLAIN GOLD GLOW LANG - WALANG DARK BORDER!
-                  boxShadow: [
-                    BoxShadow(
-                        color: const Color(0xFFFFD700).withValues(alpha: 0.8),
-                        blurRadius: _glow.value,
-                        spreadRadius: 5)
-                  ],
-                ),
-                child: ClipOval(
-                  child: Image.asset(
-                    'assets/icon.png',
-                    width: 130, height: 130,
-                    fit: BoxFit.cover,
-                    // Kung di pa gold yung asset, gagawing gold pa rin - pero pag gold na asset mo, plain lang!
-                    errorBuilder: (c, e, s) => Container(
-                      decoration: const BoxDecoration(
-                          color: Color(0xFFFFD700), shape: BoxShape.circle),
-                      child: const Icon(Icons.account_balance_wallet,
-                          size: 70, color: Color(0xFF121212)),
-                    ),
-                  ),
-                ),
+                decoration: BoxDecoration(boxShadow: [
+                  BoxShadow(
+                      color: const Color(0xFFFFD700).withValues(alpha: 0.8),
+                      blurRadius: _glow.value,
+                      spreadRadius: 5),
+                  BoxShadow(
+                      color: const Color(0xFFFFD700).withValues(alpha: 0.4),
+                      blurRadius: _glow.value * 1.8,
+                      spreadRadius: 15)
+                ]),
+                child: Image.asset('assets/icon.png', width: 130, height: 130),
               ),
             ),
             const SizedBox(height: 30),
@@ -117,11 +101,7 @@ class _SplashState extends State<SplashScreen>
                 style: TextStyle(
                     color: Color(0xFFFFD700),
                     fontSize: 26,
-                    fontWeight: FontWeight.bold,
-                    letterSpacing: 1.2)),
-            const SizedBox(height: 10),
-            const Text('Loading...',
-                style: TextStyle(color: Colors.white38, fontSize: 12)),
+                    fontWeight: FontWeight.bold)),
           ]),
         ),
       ),
@@ -141,6 +121,19 @@ class Expense {
       required this.amount,
       required this.date,
       required this.color});
+  Map<String, dynamic> toJson() => {
+        'id': id,
+        'title': title,
+        'amount': amount,
+        'date': date.toIso8601String(),
+        'color': color.toARGB32()
+      };
+  factory Expense.fromJson(Map<String, dynamic> j) => Expense(
+      id: j['id'],
+      title: j['title'],
+      amount: (j['amount'] as num).toDouble(),
+      date: DateTime.parse(j['date']),
+      color: Color(j['color']));
 }
 
 class GroupedExpense {
@@ -162,54 +155,37 @@ class PiePainter extends CustomPainter {
   PiePainter({required this.data, required this.total, this.selectedIndex});
   @override
   void paint(Canvas canvas, Size size) {
-    double startAngle = -math.pi / 2;
+    double start = -math.pi / 2;
     final center = Offset(size.width / 2, size.height / 2);
     double radius = math.min(size.width, size.height) / 2;
     for (int i = 0; i < data.length; i++) {
       var g = data[i];
       double sweep = (g.total / total) * 2 * math.pi;
-      bool isSelected = i == selectedIndex;
-      double extraRadius = isSelected ? 12 : 0;
-      Offset offset = Offset.zero;
-      if (isSelected) {
-        double midAngle = startAngle + sweep / 2;
-        offset = Offset(math.cos(midAngle) * 12, math.sin(midAngle) * 12);
+      bool sel = i == selectedIndex;
+      Offset off = Offset.zero;
+      if (sel) {
+        double mid = start + sweep / 2;
+        off = Offset(math.cos(mid) * 12, math.sin(mid) * 12);
       }
       final paint = Paint()
-        ..color = isSelected ? g.color : g.color.withValues(alpha: 0.85)
+        ..color = sel ? g.color : g.color.withValues(alpha: 0.85)
         ..style = PaintingStyle.fill;
-      if (isSelected) {
-        final glowPaint = Paint()
-          ..color = g.color.withValues(alpha: 0.5)
-          ..style = PaintingStyle.stroke
-          ..strokeWidth = 8
-          ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 10);
-        canvas.drawArc(
-            Rect.fromCircle(
-                center: center + offset, radius: radius + extraRadius),
-            startAngle,
-            sweep,
-            true,
-            glowPaint);
-      }
       canvas.drawArc(
           Rect.fromCircle(
-              center: center + offset, radius: radius + extraRadius),
-          startAngle,
+              center: center + off, radius: radius + (sel ? 12 : 0)),
+          start,
           sweep,
           true,
           paint);
-      startAngle += sweep;
+      start += sweep;
     }
-    final holePaint = Paint()
-      ..color = const Color(0xFF1E1E1E)
-      ..style = PaintingStyle.fill;
-    canvas.drawCircle(center, radius * 0.55, holePaint);
+    canvas.drawCircle(
+        center, radius * 0.55, Paint()..color = const Color(0xFF1E1E1E));
   }
 
   @override
-  bool shouldRepaint(covariant PiePainter oldDelegate) =>
-      oldDelegate.selectedIndex != selectedIndex || oldDelegate.data != data;
+  bool shouldRepaint(covariant PiePainter o) =>
+      o.selectedIndex != selectedIndex || o.data != data;
 }
 
 class HomeScreen extends StatefulWidget {
@@ -221,30 +197,145 @@ class HomeScreen extends StatefulWidget {
 class _HomeState extends State<HomeScreen> {
   double budget = 50000;
   List<Expense> all = [];
-  DateTime sDate = DateTime(2026, 9, 13);
-  DateTime eDate = DateTime(2026, 10, 13);
+  late DateTime sDate, eDate;
   Map<String, Color> colorMap = {};
   int? selectedIndex;
   final NumberFormat commaFormat = NumberFormat('#,##0');
   String fmt(num n) => commaFormat.format(n.toInt());
   String peso(num n) => '₱${fmt(n)}';
-  Color _genUniqueColor(int index) {
-    double hue = (index * 137.508) % 360;
+
+  // BOSS ITO YUNG TRIAL SETTINGS - PALITAN MO LANG PAG PRO NA!
+  static const bool isTrialVersion = true;
+  static const int trialLimit = 10;
+
+  @override
+  void initState() {
+    super.initState();
+    final now = DateTime.now();
+    sDate = DateTime(now.year, now.month - 1, 1);
+    eDate = DateTime(now.year, now.month + 2, 0);
+    _loadData();
+  }
+
+  Future<void> _loadData() async {
+    final p = await SharedPreferences.getInstance();
+    setState(() {
+      budget = p.getDouble('budget') ?? 50000;
+      String? d = p.getString('expenses');
+      if (d != null) {
+        List l = jsonDecode(d);
+        all = l.map((e) => Expense.fromJson(e)).toList();
+        for (var e in all) {
+          colorMap[e.title.toLowerCase().trim()] = e.color;
+        }
+      }
+    });
+  }
+
+  Future<void> _saveData() async {
+    final p = await SharedPreferences.getInstance();
+    await p.setDouble('budget', budget);
+    await p.setString(
+        'expenses', jsonEncode(all.map((e) => e.toJson()).toList()));
+  }
+
+  Future<void> _openProVersion() async {
+    final Uri url = Uri.parse(
+        'https://play.google.com/store/apps/details?id=com.budgetvsgastos.pro');
+    if (!await launchUrl(url, mode: LaunchMode.externalApplication)) {
+      await launchUrl(url, mode: LaunchMode.platformDefault);
+    }
+  }
+
+  void _showTrialLockDialog() {
+    showDialog(
+        context: context,
+        barrierDismissible: false,
+        builder: (_) => AlertDialog(
+              backgroundColor: const Color(0xFF1E1E1E),
+              shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(16),
+                  side: const BorderSide(color: Color(0xFFFFD700), width: 1.5)),
+              title: const Row(children: [
+                Icon(Icons.lock, color: Color(0xFFFFD700)),
+                SizedBox(width: 8),
+                Text('TRIAL LIMIT REACHED!',
+                    style: TextStyle(
+                        color: Color(0xFFFFD700),
+                        fontSize: 16,
+                        fontWeight: FontWeight.bold))
+              ]),
+              content: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text('Naka $trialLimit gastos ka na boss sa Trial Version!',
+                        style:
+                            const TextStyle(color: Colors.white, fontSize: 13)),
+                    const SizedBox(height: 10),
+                    Container(
+                        padding: const EdgeInsets.all(10),
+                        decoration: BoxDecoration(
+                            color:
+                                const Color(0xFFFFD700).withValues(alpha: 0.1),
+                            borderRadius: BorderRadius.circular(8)),
+                        child: const Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text('PRO VERSION FEATURES:',
+                                  style: TextStyle(
+                                      color: Color(0xFFFFD700),
+                                      fontWeight: FontWeight.bold,
+                                      fontSize: 11)),
+                              SizedBox(height: 6),
+                              Text(
+                                  '✓ Unlimited gastos entries\n✓ Export to Excel/PDF\n✓ No ads\n✓ Cloud backup',
+                                  style: TextStyle(
+                                      color: Colors.white70, fontSize: 11)),
+                            ])),
+                    const SizedBox(height: 10),
+                    const Text('Mag-upgrade ka na sa PRO para sa unlimited!',
+                        style: TextStyle(color: Colors.white54, fontSize: 11)),
+                  ]),
+              actions: [
+                TextButton(
+                    onPressed: () => Navigator.pop(context),
+                    child: const Text('Later',
+                        style: TextStyle(color: Colors.white54))),
+                ElevatedButton.icon(
+                    icon: const Icon(Icons.star, size: 16, color: Colors.black),
+                    style: ElevatedButton.styleFrom(
+                        backgroundColor: const Color(0xFFFFD700)),
+                    onPressed: () {
+                      Navigator.pop(context);
+                      _openProVersion();
+                    },
+                    label: const Text('UPGRADE TO PRO - ₱199',
+                        style: TextStyle(
+                            color: Colors.black,
+                            fontWeight: FontWeight.bold,
+                            fontSize: 12))),
+              ],
+            ));
+  }
+
+  Color _genUniqueColor(int i) {
+    double hue = (i * 137.508) % 360;
     return HSVColor.fromAHSV(1.0, hue, 0.85, 0.95).toColor();
   }
 
-  Color getColorForTitle(String title, {String? excludeId}) {
-    String key = title.toLowerCase().trim();
+  Color getColorForTitle(String t, {String? excludeId}) {
+    String k = t.toLowerCase().trim();
     for (var e in all) {
       if (excludeId != null && e.id == excludeId) continue;
-      if (e.title.toLowerCase().trim() == key) {
-        colorMap[key] = e.color;
+      if (e.title.toLowerCase().trim() == k) {
+        colorMap[k] = e.color;
         return e.color;
       }
     }
-    if (colorMap.containsKey(key)) return colorMap[key]!;
+    if (colorMap.containsKey(k)) return colorMap[k]!;
     Color c = _genUniqueColor(colorMap.length);
-    colorMap[key] = c;
+    colorMap[k] = c;
     return c;
   }
 
@@ -255,23 +346,23 @@ class _HomeState extends State<HomeScreen> {
         return !d.isBefore(s) && !d.isAfter(en);
       }).toList();
   List<GroupedExpense> get grouped {
-    Map<String, GroupedExpense> map = {};
+    Map<String, GroupedExpense> m = {};
     for (var e in filtered) {
-      String key = e.title.toLowerCase().trim();
-      if (map.containsKey(key)) {
-        map[key]!.total += e.amount;
-        map[key]!.count += 1;
+      String k = e.title.toLowerCase().trim();
+      if (m.containsKey(k)) {
+        m[k]!.total += e.amount;
+        m[k]!.count += 1;
       } else {
-        map[key] = GroupedExpense(
+        m[k] = GroupedExpense(
             title: e.title, total: e.amount, color: e.color, count: 1);
       }
     }
-    var list = map.values.toList();
-    list.sort((a, b) => b.total.compareTo(a.total));
-    return list;
+    var l = m.values.toList();
+    l.sort((a, b) => b.total.compareTo(a.total));
+    return l;
   }
 
-  double get totAll => all.fold(0, (a, b) => a + b.amount);
+  double get totAll => filtered.fold(0, (a, b) => a + b.amount);
   double get rem => budget - totAll;
 
   void checkOverBudget() {
@@ -289,8 +380,8 @@ class _HomeState extends State<HomeScreen> {
                         fontSize: 16,
                         fontWeight: FontWeight.bold)),
                 content: Text(
-                    'Budget: ${peso(budget)}\nGastos: ${peso(totAll)}\n\nNegative: ${peso(rem)}',
-                    style: const TextStyle(color: Colors.white, fontSize: 14)),
+                    'Budget: ${peso(budget)}\nGastos: ${peso(totAll)}\nKulang: ${peso(rem)}',
+                    style: const TextStyle(color: Colors.white)),
                 actions: [
                   TextButton(
                       onPressed: () => Navigator.pop(context),
@@ -306,7 +397,7 @@ class _HomeState extends State<HomeScreen> {
                       child: const Text('DAGDAG BUDGET',
                           style: TextStyle(
                               color: Colors.black,
-                              fontWeight: FontWeight.bold)))
+                              fontWeight: FontWeight.bold))),
                 ],
               ));
     }
@@ -318,9 +409,7 @@ class _HomeState extends State<HomeScreen> {
         context: context,
         builder: (_) => AlertDialog(
               backgroundColor: const Color(0xFF1E1E1E),
-              shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(16)),
-              title: Text(isAddMode ? 'DAGDAG BUDGET' : 'Edit Budget Limit',
+              title: Text(isAddMode ? 'DAGDAG BUDGET' : 'Edit Budget',
                   style: const TextStyle(
                       color: Color(0xFFFFD700), fontWeight: FontWeight.bold)),
               content: Column(
@@ -331,36 +420,17 @@ class _HomeState extends State<HomeScreen> {
                       Text('Current: ${peso(budget)}\nKulang: ${peso(rem)}',
                           style: const TextStyle(
                               color: Colors.white54, fontSize: 12)),
-                    if (!isAddMode)
-                      Text('Current: ${peso(budget)}',
-                          style: const TextStyle(
-                              color: Colors.white54, fontSize: 12)),
-                    const SizedBox(height: 12),
                     TextField(
                         controller: c,
                         keyboardType: TextInputType.number,
-                        autofocus: true,
                         inputFormatters: [CommaFormatter()],
                         style: const TextStyle(
                             color: Colors.white,
                             fontSize: 22,
                             fontWeight: FontWeight.bold),
                         decoration: InputDecoration(
-                            labelText: isAddMode
-                                ? 'Magkano idadagdag?'
-                                : 'Bagong limit',
-                            labelStyle: const TextStyle(color: Colors.white54),
                             prefixText: '₱',
-                            prefixStyle: const TextStyle(
-                                color: Colors.white,
-                                fontSize: 22,
-                                fontWeight: FontWeight.bold),
-                            hintText: isAddMode ? 'Ex: 10,000' : 'Ex: 50,000',
-                            enabledBorder: const UnderlineInputBorder(
-                                borderSide: BorderSide(color: Colors.white24)),
-                            focusedBorder: const UnderlineInputBorder(
-                                borderSide: BorderSide(
-                                    color: Color(0xFFFFD700), width: 2))))
+                            hintText: isAddMode ? 'Ex: 10,000' : 'Ex: 50,000')),
                   ]),
               actions: [
                 TextButton(
@@ -371,27 +441,31 @@ class _HomeState extends State<HomeScreen> {
                     style: ElevatedButton.styleFrom(
                         backgroundColor: const Color(0xFFFFD700)),
                     onPressed: () {
-                      double val =
-                          double.tryParse(c.text.replaceAll(',', '').trim()) ??
-                              0;
-                      if (val <= 0) return;
+                      double v =
+                          double.tryParse(c.text.replaceAll(',', '')) ?? 0;
+                      if (v <= 0) return;
                       setState(() {
-                        if (isAddMode) {
-                          budget += val;
-                        } else {
-                          budget = val;
-                        }
+                        if (isAddMode)
+                          budget += v;
+                        else
+                          budget = v;
                       });
+                      _saveData();
                       Navigator.pop(context);
                     },
                     child: Text(isAddMode ? 'DAGDAG NA!' : 'SAVE',
                         style: const TextStyle(
-                            color: Colors.black, fontWeight: FontWeight.bold)))
+                            color: Colors.black, fontWeight: FontWeight.bold))),
               ],
             ));
   }
 
   void addEdit({Expense? ex}) {
+    // CHECK TRIAL LIMIT BOSS!
+    if (ex == null && isTrialVersion && all.length >= trialLimit) {
+      _showTrialLockDialog();
+      return;
+    }
     final tCtrl = TextEditingController(text: ex?.title ?? '');
     final aCtrl = TextEditingController(text: ex == null ? '' : fmt(ex.amount));
     DateTime dSel = ex?.date ?? DateTime.now();
@@ -403,6 +477,17 @@ class _HomeState extends State<HomeScreen> {
                   title: Text(ex == null ? 'Add Gastos' : 'Edit Gastos',
                       style: const TextStyle(color: Colors.white)),
                   content: Column(mainAxisSize: MainAxisSize.min, children: [
+                    if (ex == null && isTrialVersion)
+                      Container(
+                          margin: const EdgeInsets.only(bottom: 8),
+                          padding: const EdgeInsets.all(6),
+                          decoration: BoxDecoration(
+                              color: Colors.orange.withValues(alpha: 0.15),
+                              borderRadius: BorderRadius.circular(6)),
+                          child: Text(
+                              'Trial: ${all.length}/$trialLimit entries',
+                              style: const TextStyle(
+                                  color: Colors.orange, fontSize: 10))),
                     TextField(
                         controller: tCtrl,
                         style: const TextStyle(color: Colors.white),
@@ -417,10 +502,7 @@ class _HomeState extends State<HomeScreen> {
                         keyboardType: TextInputType.number,
                         inputFormatters: [CommaFormatter()],
                         decoration: const InputDecoration(
-                            labelText: 'Magkano?',
-                            prefixText: '₱',
-                            hintText: '10,000',
-                            hintStyle: TextStyle(color: Colors.white24))),
+                            labelText: 'Magkano?', prefixText: '₱')),
                     const SizedBox(height: 10),
                     Text(DateFormat('MMM dd, yyyy').format(dSel),
                         style: const TextStyle(
@@ -435,7 +517,7 @@ class _HomeState extends State<HomeScreen> {
                           if (d != null) setM(() => dSel = d);
                         },
                         child: const Text('Pili Date',
-                            style: TextStyle(color: Color(0xFFFFD700))))
+                            style: TextStyle(color: Color(0xFFFFD700)))),
                   ]),
                   actions: [
                     TextButton(
@@ -469,6 +551,7 @@ class _HomeState extends State<HomeScreen> {
                             }
                             selectedIndex = null;
                           });
+                          _saveData();
                           Navigator.pop(context);
                           Future.delayed(const Duration(milliseconds: 300),
                               () => checkOverBudget());
@@ -476,7 +559,7 @@ class _HomeState extends State<HomeScreen> {
                         child: const Text('SAVE',
                             style: TextStyle(
                                 color: Colors.black,
-                                fontWeight: FontWeight.bold)))
+                                fontWeight: FontWeight.bold))),
                   ],
                 )));
   }
@@ -486,23 +569,110 @@ class _HomeState extends State<HomeScreen> {
     double totalGrouped = grouped.fold(0, (a, b) => a + b.total);
     return Scaffold(
       appBar: AppBar(
-          title: const Text('BUDGET vs GASTOS',
-              style: TextStyle(
-                  color: Color(0xFFFFD700),
-                  fontWeight: FontWeight.bold,
-                  fontSize: 18)),
-          centerTitle: true,
-          backgroundColor: const Color(0xFF1E1E1E),
-          actions: [
-            IconButton(
-                icon: const Icon(Icons.wallet, color: Color(0xFFFFD700)),
-                onPressed: () => addBudgetDialog(isAddMode: false))
-          ]),
+        backgroundColor: const Color(0xFF1E1E1E),
+        centerTitle: true,
+        toolbarHeight: 75,
+        title: Column(
+          children: [
+            const Text('BUDGET vs GASTOS',
+                style: TextStyle(
+                    color: Color(0xFFFFD700),
+                    fontWeight: FontWeight.bold,
+                    fontSize: 18)),
+            const SizedBox(height: 4),
+            Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Container(
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 7, vertical: 3),
+                  decoration: BoxDecoration(
+                      color: Colors.white10,
+                      borderRadius: BorderRadius.circular(4),
+                      border: Border.all(color: Colors.white24, width: 0.5)),
+                  child: const Text('Trial Version',
+                      style: TextStyle(
+                          color: Colors.white54,
+                          fontSize: 9,
+                          letterSpacing: 0.5)),
+                ),
+                const SizedBox(width: 8),
+                InkWell(
+                  onTap: _openProVersion,
+                  child: const Row(
+                    children: [
+                      Icon(Icons.star, size: 12, color: Color(0xFF00D1FF)),
+                      SizedBox(width: 3),
+                      Text('Upgrade to PRO',
+                          style: TextStyle(
+                              color: Color(0xFF00D1FF),
+                              fontSize: 10,
+                              decoration: TextDecoration.underline,
+                              decorationColor: Color(0xFF00D1FF),
+                              fontWeight: FontWeight.bold)),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+          ],
+        ),
+        actions: [
+          IconButton(
+              icon: const Icon(Icons.wallet, color: Color(0xFFFFD700)),
+              onPressed: () => addBudgetDialog())
+        ],
+      ),
       floatingActionButton: FloatingActionButton(
-          backgroundColor: const Color(0xFFFFD700),
-          onPressed: () => addEdit(),
-          child: const Icon(Icons.add, color: Colors.black)),
+        backgroundColor: isTrialVersion && all.length >= trialLimit
+            ? Colors.grey
+            : const Color(0xFFFFD700),
+        onPressed: () => addEdit(),
+        child: Icon(
+            isTrialVersion && all.length >= trialLimit ? Icons.lock : Icons.add,
+            color: Colors.black),
+      ),
       body: ListView(padding: const EdgeInsets.all(16), children: [
+        if (isTrialVersion)
+          Container(
+              margin: const EdgeInsets.only(bottom: 10),
+              padding: const EdgeInsets.all(8),
+              decoration: BoxDecoration(
+                  color: all.length >= trialLimit
+                      ? Colors.red.withValues(alpha: 0.15)
+                      : Colors.orange.withValues(alpha: 0.1),
+                  borderRadius: BorderRadius.circular(8),
+                  border: Border.all(
+                      color:
+                          all.length >= trialLimit ? Colors.red : Colors.orange,
+                      width: 0.5)),
+              child: Row(children: [
+                Icon(all.length >= trialLimit ? Icons.lock : Icons.info_outline,
+                    size: 14,
+                    color:
+                        all.length >= trialLimit ? Colors.red : Colors.orange),
+                const SizedBox(width: 6),
+                Text(
+                    all.length >= trialLimit
+                        ? 'Trial limit reached!'
+                        : 'Trial: ${all.length}/$trialLimit gastos',
+                    style: TextStyle(
+                        color: all.length >= trialLimit
+                            ? Colors.red
+                            : Colors.orange,
+                        fontSize: 11,
+                        fontWeight: FontWeight.bold)),
+                const Spacer(),
+                if (all.length >= trialLimit)
+                  InkWell(
+                      onTap: _openProVersion,
+                      child: const Text('UPGRADE',
+                          style: TextStyle(
+                              color: Color(0xFF00D1FF),
+                              fontSize: 10,
+                              fontWeight: FontWeight.bold,
+                              decoration: TextDecoration.underline)))
+              ])),
         Container(
             padding: const EdgeInsets.all(14),
             decoration: BoxDecoration(
@@ -596,110 +766,30 @@ class _HomeState extends State<HomeScreen> {
                   color: const Color(0xFF1E1E1E),
                   borderRadius: BorderRadius.circular(16)),
               child: Column(children: [
-                const Text('PIE CHART - ASTIG DONUT',
+                const Text('PIE CHART',
                     style: TextStyle(
                         color: Colors.white,
                         fontWeight: FontWeight.bold,
                         fontSize: 12)),
-                Text(
-                    selectedIndex == null
-                        ? '${grouped.length} items - tap label to highlight!'
-                        : 'Selected: ${grouped[selectedIndex!].title} ${peso(grouped[selectedIndex!].total)} - tap again to unselect',
-                    style: TextStyle(
-                        color: selectedIndex == null
-                            ? Colors.white38
-                            : const Color(0xFFFFD700),
-                        fontSize: 10,
-                        fontWeight: selectedIndex == null
-                            ? FontWeight.normal
-                            : FontWeight.bold)),
                 const SizedBox(height: 16),
-                GestureDetector(
-                    onTap: () => setState(() => selectedIndex = null),
-                    child: SizedBox(
-                        height: 240,
-                        child: Stack(alignment: Alignment.center, children: [
-                          CustomPaint(
-                              size: const Size(240, 240),
-                              painter: PiePainter(
-                                  data: grouped,
-                                  total: totalGrouped,
-                                  selectedIndex: selectedIndex)),
-                          Column(mainAxisSize: MainAxisSize.min, children: [
-                            const Text('TOTAL',
-                                style: TextStyle(
-                                    color: Colors.white54, fontSize: 10)),
-                            Text(peso(totalGrouped),
-                                style: const TextStyle(
-                                    color: Colors.white,
-                                    fontWeight: FontWeight.bold,
-                                    fontSize: 18)),
-                            if (selectedIndex != null) ...[
-                              const SizedBox(height: 4),
-                              Text(
-                                  '${((grouped[selectedIndex!].total / totalGrouped) * 100).toStringAsFixed(1)}%',
-                                  style: TextStyle(
-                                      color: grouped[selectedIndex!].color,
-                                      fontWeight: FontWeight.bold,
-                                      fontSize: 12))
-                            ]
-                          ])
-                        ]))),
-                const SizedBox(height: 16),
-                Wrap(
-                    spacing: 8,
-                    runSpacing: 8,
-                    children: List.generate(grouped.length, (i) {
-                      var g = grouped[i];
-                      bool isSel = i == selectedIndex;
-                      return InkWell(
-                          onTap: () {
-                            setState(() {
-                              if (selectedIndex == i) {
-                                selectedIndex = null;
-                              } else {
-                                selectedIndex = i;
-                              }
-                            });
-                          },
-                          child: AnimatedContainer(
-                              duration: const Duration(milliseconds: 200),
-                              padding: EdgeInsets.symmetric(
-                                  horizontal: isSel ? 12 : 8,
-                                  vertical: isSel ? 6 : 4),
-                              decoration: BoxDecoration(
-                                  color: isSel
-                                      ? g.color.withValues(alpha: 0.3)
-                                      : g.color.withValues(alpha: 0.15),
-                                  borderRadius: BorderRadius.circular(20),
-                                  border: Border.all(
-                                      color: g.color, width: isSel ? 2.5 : 1),
-                                  boxShadow: isSel
-                                      ? [
-                                          BoxShadow(
-                                              color: g.color
-                                                  .withValues(alpha: 0.6),
-                                              blurRadius: 12,
-                                              spreadRadius: 1)
-                                        ]
-                                      : []),
-                              child: Row(
-                                  mainAxisSize: MainAxisSize.min,
-                                  children: [
-                                    Container(
-                                        width: isSel ? 10 : 8,
-                                        height: isSel ? 10 : 8,
-                                        decoration: BoxDecoration(
-                                            color: g.color,
-                                            shape: BoxShape.circle)),
-                                    const SizedBox(width: 4),
-                                    Text('${g.title} ${peso(g.total)}',
-                                        style: TextStyle(
-                                            color: g.color,
-                                            fontSize: isSel ? 12 : 11,
-                                            fontWeight: FontWeight.bold))
-                                  ])));
-                    })),
+                SizedBox(
+                    height: 240,
+                    child: Stack(alignment: Alignment.center, children: [
+                      CustomPaint(
+                          size: const Size(240, 240),
+                          painter:
+                              PiePainter(data: grouped, total: totalGrouped)),
+                      Column(mainAxisSize: MainAxisSize.min, children: [
+                        const Text('TOTAL',
+                            style:
+                                TextStyle(color: Colors.white54, fontSize: 10)),
+                        Text(peso(totalGrouped),
+                            style: const TextStyle(
+                                color: Colors.white,
+                                fontWeight: FontWeight.bold,
+                                fontSize: 18))
+                      ])
+                    ])),
               ])),
         if (grouped.isEmpty)
           const Center(
@@ -745,7 +835,10 @@ class _HomeState extends State<HomeScreen> {
                     IconButton(
                         icon: const Icon(Icons.delete,
                             size: 16, color: Colors.redAccent),
-                        onPressed: () => setState(() => all.remove(e)))
+                        onPressed: () {
+                          setState(() => all.remove(e));
+                          _saveData();
+                        })
                   ]))),
       ]),
     );
